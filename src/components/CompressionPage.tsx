@@ -30,13 +30,32 @@ export default function CompressionPage({ dark }: CompressionPageProps) {
       workerRef.current.onmessage = async (ev) => {
         const msg = ev.data;
         if (msg.type === "result") {
-          const { blob, mime, originalMime, originalName, isArchive } = msg;
-          const b = new Blob([blob], { type: mime || "application/octet-stream" });
+          const { blob: rawData, mime, originalMime, originalName, isArchive } = msg as {
+            blob: unknown; mime?: string; originalMime?: string; originalName?: string; isArchive?: boolean;
+          };
+
+          let arrayBuffer: ArrayBuffer;
+          if (rawData instanceof ArrayBuffer) {
+            // Ensure a standalone ArrayBuffer (not a SAB) by copying
+            arrayBuffer = new Uint8Array(rawData).slice().buffer as ArrayBuffer;
+          } else if (typeof SharedArrayBuffer !== 'undefined' && rawData instanceof SharedArrayBuffer) {
+            // Copy into a new ArrayBuffer
+            arrayBuffer = new Uint8Array(rawData).slice().buffer as ArrayBuffer;
+          } else if (rawData instanceof Uint8Array) {
+            // Copy to a new ArrayBuffer rather than slicing the underlying buffer
+            arrayBuffer = new Uint8Array(rawData).slice().buffer as ArrayBuffer;
+          } else if (rawData instanceof Blob) {
+            arrayBuffer = await rawData.arrayBuffer();
+          } else {
+            throw new Error('Unsupported blob data type from worker');
+          }
+
+          const b = new Blob([arrayBuffer], { type: mime || "application/octet-stream" });
           setWorkspaceBlob(b);
           
           // Store original file info for proper download
-          setOriginalMime(originalMime);
-          setOriginalFileName(originalName);
+          setOriginalMime(originalMime ?? null);
+          setOriginalFileName(originalName ?? null);
           
           if (isArchive) {
             // For archived files, we need to decompress them for download
@@ -203,7 +222,8 @@ export default function CompressionPage({ dark }: CompressionPageProps) {
     return new Promise(async (resolve, reject) => {
       try {
         // Load pako library if not already loaded
-        if (!(window as any).pako) {
+        const win = window as unknown as { pako?: { ungzip: (data: Uint8Array) => Uint8Array } };
+        if (!win.pako) {
           const script = document.createElement('script');
           script.src = 'https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js';
           script.onload = async () => {
@@ -224,7 +244,11 @@ export default function CompressionPage({ dark }: CompressionPageProps) {
     });
   };
 
-  const decompressFile = async (archiveBlob: Blob, resolve: Function, reject: Function) => {
+  const decompressFile = async (
+    archiveBlob: Blob,
+    resolve: (value: Blob | PromiseLike<Blob>) => void,
+    reject: (reason?: unknown) => void
+  ) => {
     try {
       const arrayBuffer = await archiveBlob.arrayBuffer();
       const data = new Uint8Array(arrayBuffer);
@@ -241,10 +265,15 @@ export default function CompressionPage({ dark }: CompressionPageProps) {
       const compressedData = data.slice(4 + wrapperLength);
       
       // Decompress the file data
-      const decompressedData = (window as any).pako.ungzip(compressedData);
+      const win = window as unknown as { pako?: { ungzip: (data: Uint8Array) => Uint8Array } };
+      if (!win.pako) {
+        throw new Error('Decompression library not loaded');
+      }
+      const decompressedData = win.pako.ungzip(compressedData);
       
-      // Create blob with original MIME type
-      const originalBlob = new Blob([decompressedData], { 
+      // Create blob with original MIME type (force a real ArrayBuffer, not SAB)
+      const copy = new Uint8Array(decompressedData).slice();
+      const originalBlob = new Blob([copy.buffer as ArrayBuffer], { 
         type: wrapper.originalMime || 'application/octet-stream' 
       });
       

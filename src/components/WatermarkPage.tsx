@@ -589,7 +589,7 @@ export default function WatermarkPage({ dark }: WatermarkPageProps) {
                 ].map((pos) => (
                   <button
                     key={pos.value}
-                    onClick={() => setWatermarkPosition(pos.value as any)}
+                    onClick={() => setWatermarkPosition(pos.value as 'center' | 'diagonal' | 'bottom-right')}
                     className={`flex-1 p-3 rounded-lg border-2 transition-colors ${
                       watermarkPosition === pos.value
                         ? 'border-purple-500 bg-purple-50 dark:bg-purple-900'
